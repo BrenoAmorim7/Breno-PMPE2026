@@ -34,11 +34,63 @@ button.b{background:var(--ac);color:#fff;border:0;font-weight:600}button.g{backg
 <body>
 <div id="app"></div>
 <nav id="nav"></nav>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
-var KEY="ciclo-estudos-v1",COLORS=["#2f6fed","#16a34a","#f59e0b","#db2777","#7c3aed","#0891b2","#ea580c","#65a30d"];
+var BASEKEY="ciclo-estudos-v1",KEY=BASEKEY,COLORS=["#2f6fed","#16a34a","#f59e0b","#db2777","#7c3aed","#0891b2","#ea580c","#65a30d"];
 var S=load(),tab="estudar",tick=null;S.plan=S.plan||{};
-function load(){try{var r=localStorage.getItem(KEY);if(r)return JSON.parse(r)}catch(e){}return{subs:[],logs:[],revs:[],cycleStart:today(),timer:null,steps:"1,7,30"}}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function loadKey(k){try{var r=localStorage.getItem(k);if(r)return JSON.parse(r)}catch(e){}return null}
+function fresh(){return{subs:[],logs:[],revs:[],cycleStart:today(),timer:null,steps:"1,7,30",plan:{},upd:0}}
+function load(){return loadKey(KEY)||fresh()}
+function fix(){S.subs=S.subs||[];S.logs=S.logs||[];S.revs=S.revs||[];S.plan=S.plan||{};S.steps=S.steps||"1,7,30";S.cycleStart=S.cycleStart||today();S.upd=S.upd||0}
+function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function save(){S.upd=Date.now();saveLocal();push()}
+
+var SBURL="https://lslxenjwfrzosavhqfrz.supabase.co",SBKEY="sb_publishable_YszZ3Oix_UG4jhRym3WIyg_hIwCN925";
+var sb=null,user=null,needAuth=false,syncMsg="",pushT=null,syncOn=false;
+try{sb=window.supabase.createClient(SBURL,SBKEY)}catch(e){sb=null}
+function setSt(m){syncMsg=m;var e=document.getElementById("syncst");if(e)e.textContent=m}
+function hora(){return new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}
+function push(){if(!user||!sb)return;clearTimeout(pushT);pushT=setTimeout(doPush,700)}
+function doPush(){if(!user||!sb)return;clearTimeout(pushT);var d=JSON.parse(JSON.stringify(S));d.timer=null;
+  sb.from("user_data").upsert({user_id:user.id,data:d,updated_at:new Date().toISOString()}).then(function(r){setSt(r.error?"Falha ao sincronizar (sem conexão?)":"Sincronizado às "+hora())},function(){setSt("Falha ao sincronizar (sem conexão?)")})}
+function pull(){if(!user||!sb)return;
+  sb.from("user_data").select("data").eq("user_id",user.id).maybeSingle().then(function(r){var c=r.data&&r.data.data;
+    if(c&&(c.upd||0)>(S.upd||0)){var tm=S.timer;S=c;S.timer=tm||null;fix();saveLocal();render()}
+    if(!r.error)setSt("Sincronizado às "+hora())},function(){})}
+function syncNow(){doPush();pull()}
+function startSync(){if(syncOn)return;syncOn=true;document.addEventListener("visibilitychange",function(){if(!document.hidden)pull()});setInterval(function(){if(!document.hidden)pull()},30000)}
+function afterLogin(){
+  needAuth=false;try{localStorage.removeItem("ciclo-guest")}catch(e){}
+  var guestS=S,migrated=false;KEY=BASEKEY+"-"+user.id;S=loadKey(KEY);
+  sb.from("user_data").select("data").eq("user_id",user.id).maybeSingle().then(function(r){
+    var c=r.data&&r.data.data;
+    if(c){var tm=S&&S.timer;S=c;S.timer=tm||null}
+    else if(!S){S=guestS;migrated=true}
+    fix();saveLocal();
+    if(!c&&!r.error){doPush();if(migrated)try{localStorage.removeItem(BASEKEY)}catch(e){}}
+    startSync();render()
+  },function(){if(!S)S=guestS;fix();saveLocal();render()})}
+function trErr(m){m=String(m||"");if(/Invalid login/i.test(m))return"E-mail ou senha incorretos.";if(/already registered/i.test(m))return"Este e-mail já tem conta. Clique em Entrar.";if(/not confirmed/i.test(m))return"Confirme seu e-mail antes de entrar.";if(/rate limit/i.test(m))return"Muitas tentativas. Aguarde um pouco.";return m}
+function doAuth(m){var e=v("aemail").trim(),p=v("apass"),msg=document.getElementById("amsg");
+  if(!e||p.length<6){msg.textContent="Informe e-mail e senha (mínimo 6 caracteres).";return}
+  msg.textContent="Aguarde...";
+  var pr=m=="up"?sb.auth.signUp({email:e,password:p}):sb.auth.signInWithPassword({email:e,password:p});
+  pr.then(function(r){if(r.error){msg.textContent=trErr(r.error.message);return}
+    if(!r.data.session){msg.textContent="Conta criada! Confirme o e-mail que enviamos e depois clique em Entrar.";return}
+    user=r.data.session.user;afterLogin()},function(){msg.textContent="Sem conexão. Tente novamente."})}
+function useGuest(){try{localStorage.setItem("ciclo-guest","1")}catch(e){}needAuth=false;render()}
+function logout(){if(!confirm("Sair da conta? Seus dados continuam salvos na nuvem."))return;
+  sb.auth.signOut().then(function(){try{localStorage.removeItem(KEY)}catch(e){}user=null;KEY=BASEKEY;S=load();fix();needAuth=true;render()})}
+function init(){
+  if(!sb){render();return}
+  sb.auth.getSession().then(function(r){var ses=r.data&&r.data.session;
+    if(ses){user=ses.user;afterLogin()}
+    else{var g=false;try{g=!!localStorage.getItem("ciclo-guest")}catch(e){}needAuth=!g;render()}
+  },function(){render()})}
+function vAuth(){return'<div class="card" style="margin-top:40px"><h2 style="margin-top:0">📚 Ciclo de Estudos</h2><div class="mu" style="margin-bottom:10px">Entre para sincronizar seus dados entre celular e computador.</div>'
+  +'<input id="aemail" type="email" placeholder="E-mail" autocomplete="email" style="width:100%;margin-bottom:8px"><input id="apass" type="password" placeholder="Senha (mínimo 6 caracteres)" autocomplete="current-password" style="width:100%;margin-bottom:8px">'
+  +'<div class="row"><button class="b" onclick="doAuth(\'in\')">Entrar</button><button class="b g" onclick="doAuth(\'up\')">Criar conta</button></div><div id="amsg" class="mu"></div>'
+  +'<button class="b g" style="width:100%;margin-top:10px" onclick="useGuest()">Usar sem conta (só neste aparelho)</button></div>'}
 function today(d){d=d||new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
 function addDays(s,n){var d=new Date(s+"T12:00:00");d.setDate(d.getDate()+n);return today(d)}
 function uid(){return Math.random().toString(36).slice(2,9)}
@@ -161,7 +213,7 @@ function vGraf(){
 function vMat(){
   var h='<div class="card"><h3>Nova matéria</h3><div class="row"><input id="sname" placeholder="Nome (ex.: Português)"><input id="sh" type="number" step="0.5" min="0" placeholder="horas no ciclo"></div><button class="b" style="width:100%" onclick="addSub()">Adicionar</button></div>';
   S.subs.forEach(function(s){h+='<div class="card row"><span style="flex:3"><span class="dot" style="background:'+s.color+'"></span>'+esc(s.name)+'</span><input type="number" step="0.5" min="0" value="'+(s.cycleMin/60)+'" onchange="setH(\''+s.id+'\',this.value)" style="flex:1.2" title="horas no ciclo"><span class="mu" style="flex:0">h</span><button class="b g" style="flex:0" onclick="delSub(\''+s.id+'\')">✕</button></div>'});
-  h+='<div class="mu">Os dados ficam salvos só neste aparelho e navegador.</div>';
+  h+=user?'<div class="card"><h3>Conta</h3><div class="mu">'+esc(user.email)+'</div><div class="mu" id="syncst">'+esc(syncMsg)+'</div><div class="row"><button class="b g" onclick="syncNow()">Sincronizar agora</button><button class="b g" onclick="logout()">Sair</button></div></div>':'<div class="card"><h3>Conta</h3><div class="mu">Modo sem conta: os dados ficam salvos só neste aparelho e navegador.</div>'+(sb?'<button class="b" style="width:100%;margin-top:8px" onclick="needAuth=true;render()">Entrar / criar conta</button>':'')+'</div>';
   return h}
 
 function vCron(){
@@ -174,6 +226,9 @@ function vCron(){
   return h+'<div class="card">Total da semana: <b>'+fm(tw)+'</b></div>'}
 var TABS=[["estudar","⏱ Estudar",vEstudar],["ciclo","🔄 Ciclo",vCiclo],["cron","📅 Cronograma",vCron],["rev","🧠 Revisões",vRev],["graf","📊 Gráficos",vGraf],["mat","📚 Matérias",vMat]];
 function render(){
+  var navEl=document.getElementById("nav");
+  if(needAuth){navEl.style.display="none";document.getElementById("app").innerHTML=vAuth();return}
+  navEl.style.display="";
   var keep={};["tnote","mnote","mmin","tsub","msub"].forEach(function(i){var e=document.getElementById(i);if(e)keep[i]=e.value});
   document.getElementById("app").innerHTML=TABS.filter(function(t){return t[0]==tab})[0][2]();
   document.getElementById("nav").innerHTML=TABS.map(function(t){return'<button class="'+(t[0]==tab?"on":"")+'" onclick="go(\''+t[0]+'\')"><span class="ic">'+t[1].split(" ")[0]+'</span><span class="lb">'+t[1].split(" ").slice(1).join(" ")+'</span></button>'}).join("");
@@ -183,7 +238,7 @@ function render(){
 }
 function go(t){tab=t;render();window.scrollTo(0,0)}
 setInterval(function(){var c=document.getElementById("clk");if(c)c.textContent=clock()},1000);
-render();
+init();
 </script>
 </body>
 </html>
