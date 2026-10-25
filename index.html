@@ -224,14 +224,30 @@ function vMat(){
   h+=user?'<div class="card"><h3>Conta</h3><div class="mu">'+esc(user.email)+'</div><div class="mu" id="syncst">'+esc(syncMsg)+'</div><div class="row"><button class="b g" onclick="syncNow()">Sincronizar agora</button><button class="b g" onclick="logout()">Sair</button></div></div>':'<div class="card"><h3>Conta</h3><div class="mu">Modo sem conta: os dados ficam salvos só neste aparelho e navegador.</div>'+(sb?'<button class="b" style="width:100%;margin-top:8px" onclick="needAuth=true;render()">Entrar / criar conta</button>':'')+'</div>';
   return h}
 
+var cwk=0;
+function cwkGo(n){cwk=n==0?0:cwk+n;render()}
+function mondayOf(date){return addDays(date,-((dow(date)+6)%7))}
+function fmtD(x){return x.slice(8)+"/"+x.slice(5,7)}
+function sidMin(sid,a,b){return S.logs.filter(function(l){return l.sid==sid&&l.date>=a&&l.date<=b}).reduce(function(x,l){return x+l.min},0)}
+function dayPlanAgg(d){var a={},o=[];planDay(d).forEach(function(p){if(!(p.sid in a)){a[p.sid]=0;o.push(p.sid)}a[p.sid]+=p.min});return{a:a,o:o}}
 function vCron(){
   if(!S.subs.length)return'<div class="card">Cadastre matérias na aba <b>Matérias</b> para montar o cronograma.</div>';
-  var h='<div class="mu" style="margin:4px 0">Defina, para cada dia da semana, quais matérias estudar e por quantas horas.</div>',tw=0,td=new Date().getDay();
-  ORD.forEach(function(d){var items=planDay(d),tot=items.reduce(function(a,p){return a+p.min},0);tw+=tot;
-    h+='<div class="card"'+(d==td?' style="border-color:var(--ac)"':'')+'><div class="row" style="margin:0 0 4px"><h3 style="margin:0">'+DN[d]+(d==td?' · hoje':'')+'</h3><span class="mu" style="text-align:right">'+(tot?fm(tot):"livre")+'</span></div>'
-    +items.map(function(p){return'<div class="row"><span style="flex:3"><span class="dot" style="background:'+sub(p.sid).color+'"></span>'+esc(sub(p.sid).name)+'</span><span class="mu" style="flex:1;text-align:right">'+fm(p.min)+'</span><button class="b g" style="flex:0" onclick="delPlan('+d+',\''+p.id+'\')">✕</button></div>'}).join("")
+  var td=new Date().getDay(),mon=mondayOf(addDays(today(),7*cwk)),sun=addDays(mon,6),wp={},wo=[],tp=0,dn=0,h="",tw=0;
+  ORD.forEach(function(d){var g=dayPlanAgg(d);g.o.forEach(function(sid){if(!(sid in wp)){wp[sid]=0;wo.push(sid)}wp[sid]+=g.a[sid]})});
+  wo.forEach(function(sid){tp+=wp[sid];dn+=Math.min(sidMin(sid,mon,sun),wp[sid])});
+  var pc=tp?Math.round(dn/tp*100):0;
+  h+='<div class="row" style="margin:4px 0"><button class="b g" style="flex:0 0 auto" onclick="cwkGo(-1)">◀</button><div style="text-align:center"><b>'+(cwk==0?"Esta semana":cwk==-1?"Semana passada":"Semana")+'</b><div class="mu">'+fmtD(mon)+' a '+fmtD(sun)+'</div></div><button class="b g" style="flex:0 0 auto" onclick="cwkGo(1)">▶</button></div>';
+  if(cwk!=0)h+='<button class="b g" style="width:100%;margin-bottom:6px" onclick="cwkGo(0)">Voltar para esta semana</button>';
+  if(tp){h+='<div class="card"><h3>Progresso da semana</h3><div class="big">'+pc+'%</div><div class="bar"><i style="width:'+pc+'%;background:var(--ac)"></i></div><div class="mu" style="margin:6px 0">'+fm(dn)+' de '+fm(tp)+'</div>'
+    +wo.map(function(sid){var m=sidMin(sid,mon,sun),p=wp[sid],q=Math.min(100,Math.round(m/p*100));return'<div style="margin:8px 0"><div class="row" style="margin:0"><span><span class="dot" style="background:'+sub(sid).color+'"></span>'+esc(sub(sid).name)+(m>=p?" ✓":"")+'</span><span class="mu" style="text-align:right">'+fm(m)+' / '+fm(p)+'</span></div><div class="bar"><i style="width:'+q+'%;background:'+sub(sid).color+'"></i></div></div>'}).join("")+'</div>'}
+  ORD.forEach(function(d,i){var date=addDays(mon,i),g=dayPlanAgg(d),items=planDay(d),tot=items.reduce(function(a,p){return a+p.min},0),dm=0;tw+=tot;
+    g.o.forEach(function(sid){dm+=sidMin(sid,date,date)});
+    var ok=tot&&dm>=tot,q=tot?Math.min(100,Math.round(dm/tot*100)):0,hoje=(cwk==0&&d==td);
+    h+='<div class="card"'+(hoje?' style="border-color:var(--ac)"':'')+'><div class="row" style="margin:0 0 4px"><h3 style="margin:0">'+DN[d]+' <span class="mu">'+fmtD(date)+(hoje?' · hoje':'')+'</span></h3><span class="mu" style="text-align:right">'+(tot?fm(dm)+' / '+fm(tot)+(ok?' ✓':''):"livre")+'</span></div>'
+    +(tot?'<div class="bar" style="margin-bottom:6px"><i style="width:'+q+'%;background:var(--ac)"></i></div>':'')
+    +items.map(function(p){return'<div class="row"><span style="flex:3"><span class="dot" style="background:'+sub(p.sid).color+'"></span>'+esc(sub(p.sid).name)+'</span><span class="mu" style="flex:1;text-align:right">'+fm(p.min)+'</span><button class="b g" style="flex:0 0 auto" onclick="delPlan('+d+',\''+p.id+'\')">✕</button></div>'}).join("")
     +'<div class="row"><select id="ps'+d+'">'+subOpts()+'</select><input id="ph'+d+'" type="number" step="0.5" min="0" placeholder="horas"><button class="b" style="flex:0 0 auto" onclick="addPlan('+d+')">+ Adicionar</button></div></div>'});
-  return h+'<div class="card">Total da semana: <b>'+fm(tw)+'</b></div>'}
+  return h+'<div class="card">Total planejado por semana: <b>'+fm(tw)+'</b><div class="mu" style="margin-top:4px">O plano é o mesmo toda semana. Nas semanas passadas, o progresso compara o que você estudou com o plano atual.</div></div>'}
 var TABS=[["estudar","⏱ Estudar",vEstudar],["ciclo","🔄 Ciclo",vCiclo],["cron","📅 Cronograma",vCron],["rev","🧠 Revisões",vRev],["graf","📊 Gráficos",vGraf],["mat","📚 Matérias",vMat]];
 function render(){
   var navEl=document.getElementById("nav");
