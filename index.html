@@ -37,11 +37,11 @@ button.b{background:var(--ac);color:#fff;border:0;font-weight:600}button.g{backg
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 var BASEKEY="ciclo-estudos-v1",KEY=BASEKEY,COLORS=["#2f6fed","#16a34a","#f59e0b","#db2777","#7c3aed","#0891b2","#ea580c","#65a30d"];
-var S=load(),tab="estudar",tick=null;S.plan=S.plan||{};
+var S=load(),tab="estudar",tick=null;fix();
 function loadKey(k){try{var r=localStorage.getItem(k);if(r)return JSON.parse(r)}catch(e){}return null}
 function fresh(){return{subs:[],logs:[],revs:[],cycleStart:today(),timer:null,steps:"1,7,30",plan:{},upd:0}}
 function load(){return loadKey(KEY)||fresh()}
-function fix(){S.subs=S.subs||[];S.logs=S.logs||[];S.revs=S.revs||[];S.plan=S.plan||{};S.steps=S.steps||"1,7,30";S.cycleStart=S.cycleStart||today();S.cycleNo=S.cycleNo||1;S.cycles=S.cycles||[];S.upd=S.upd||0}
+function fix(){S.subs=S.subs||[];S.logs=S.logs||[];S.revs=S.revs||[];S.plan=S.plan||{};S.steps=S.steps||"1,7,30";S.cycleStart=S.cycleStart||today();S.cycleNo=S.cycleNo||1;S.cycles=S.cycles||[];S.dels=S.dels||{};S.upd=S.upd||0}
 function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
 function save(){S.upd=Date.now();saveLocal();push()}
 
@@ -50,24 +50,46 @@ var sb=null,user=null,needAuth=false,syncMsg="",pushT=null,syncOn=false;
 try{sb=window.supabase.createClient(SBURL,SBKEY)}catch(e){sb=null}
 function setSt(m){syncMsg=m;var e=document.getElementById("syncst");if(e)e.textContent=m}
 function hora(){return new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}
+function markDel(id){S.dels=S.dels||{};S.dels[id]=1}
+function mergeS(a,b){
+  var dl={},k;for(k in (a.dels||{}))dl[k]=1;for(k in (b.dels||{}))dl[k]=1;
+  var nw=(b.upd||0)>(a.upd||0)?b:a,m=JSON.parse(JSON.stringify(nw));
+  function uni(xs,ys,pref){var mp={},o=[];(xs||[]).concat(ys||[]).forEach(function(it){if(dl[it.id])return;var e=mp[it.id];if(!e){mp[it.id]=it;o.push(it)}else if(pref&&pref(it,e)){o[o.indexOf(e)]=it;mp[it.id]=it}});return JSON.parse(JSON.stringify(o))}
+  m.subs=uni(nw.subs,(nw===a?b:a).subs);
+  m.logs=uni(a.logs,b.logs);
+  m.revs=uni(a.revs,b.revs,function(it,e){return it.done&&!e.done});
+  var cm={};(a.cycles||[]).concat(b.cycles||[]).forEach(function(c){if(!cm[c.n])cm[c.n]=c});
+  m.cycles=Object.keys(cm).map(Number).sort(function(x,y){return x-y}).map(function(n){return cm[n]});
+  var hi=(b.cycleNo||1)>(a.cycleNo||1)?b:((a.cycleNo||1)>(b.cycleNo||1)?a:nw);
+  m.cycleNo=hi.cycleNo||1;m.cycleStart=hi.cycleStart;
+  m.dels=dl;m.upd=Math.max(a.upd||0,b.upd||0);m.timer=a.timer||null;
+  return m}
+function core(x){var y=JSON.parse(JSON.stringify(x));delete y.timer;delete y.upd;return JSON.stringify(y)}
 function push(){if(!user||!sb)return;clearTimeout(pushT);pushT=setTimeout(doPush,700)}
-function doPush(){if(!user||!sb)return;clearTimeout(pushT);var d=JSON.parse(JSON.stringify(S));d.timer=null;
-  sb.from("user_data").upsert({user_id:user.id,data:d,updated_at:new Date().toISOString()}).then(function(r){setSt(r.error?"Falha ao sincronizar (sem conexão?)":"Sincronizado às "+hora())},function(){setSt("Falha ao sincronizar (sem conexão?)")})}
+function doPush(){if(!user||!sb)return;clearTimeout(pushT);
+  sb.from("user_data").select("data").eq("user_id",user.id).maybeSingle().then(function(r){
+    var c=r.data&&r.data.data;
+    if(c){var before=core(S);S=mergeS(S,c);fix();if(core(S)!=before){saveLocal();render()}}
+    var d=JSON.parse(JSON.stringify(S));d.timer=null;
+    return sb.from("user_data").upsert({user_id:user.id,data:d,updated_at:new Date().toISOString()})
+  }).then(function(r){setSt(r&&r.error?"Falha ao sincronizar (sem conexão?)":"Sincronizado às "+hora())},function(){setSt("Falha ao sincronizar (sem conexão?)")})}
 function pull(){if(!user||!sb)return;
   sb.from("user_data").select("data").eq("user_id",user.id).maybeSingle().then(function(r){var c=r.data&&r.data.data;
-    if(c&&(c.upd||0)>(S.upd||0)){var tm=S.timer;S=c;S.timer=tm||null;fix();saveLocal();render()}
+    if(c){var before=core(S),m=mergeS(S,c);
+      if(core(m)!=before){S=m;fix();saveLocal();render()}
+      if(core(S)!=core(mergeS(c,c)))doPush()}
     if(!r.error)setSt("Sincronizado às "+hora())},function(){})}
-function syncNow(){doPush();pull()}
+function syncNow(){doPush()}
 function startSync(){if(syncOn)return;syncOn=true;document.addEventListener("visibilitychange",function(){if(!document.hidden)pull()});setInterval(function(){if(!document.hidden)pull()},30000)}
 function afterLogin(){
   needAuth=false;try{localStorage.removeItem("ciclo-guest")}catch(e){}
   var guestS=S,migrated=false;KEY=BASEKEY+"-"+user.id;S=loadKey(KEY);
   sb.from("user_data").select("data").eq("user_id",user.id).maybeSingle().then(function(r){
-    var c=r.data&&r.data.data;
-    if(c){var tm=S&&S.timer;S=c;S.timer=tm||null}
+    var c=r.data&&r.data.data,tm=S&&S.timer;
+    if(c){S=S?mergeS(S,c):c;S.timer=tm||null}
     else if(!S){S=guestS;migrated=true}
     fix();saveLocal();
-    if(!c&&!r.error){doPush();if(migrated)try{localStorage.removeItem(BASEKEY)}catch(e){}}
+    if(!r.error&&(!c||core(S)!=core(c))){doPush();if(migrated)try{localStorage.removeItem(BASEKEY)}catch(e){}}
     startSync();render()
   },function(){if(!S)S=guestS;fix();saveLocal();render()})}
 function trErr(m){m=String(m||"");if(/Invalid login/i.test(m))return"E-mail ou senha incorretos.";if(/already registered/i.test(m))return"Este e-mail já tem conta. Clique em Entrar.";if(/not confirmed/i.test(m))return"Confirme seu e-mail antes de entrar.";if(/rate limit/i.test(m))return"Muitas tentativas. Aguarde um pouco.";return m}
@@ -126,17 +148,18 @@ function manual(){var m=parseInt(v("mmin"));if(!m||!S.subs.length)return;addLogR
 function discard(){S.timer=null;save();render()}
 function addSub(){var n=v("sname").trim();if(!n)return;var h=parseFloat(v("sh"))||0;
   S.subs.push({id:uid(),name:n,color:COLORS[S.subs.length%COLORS.length],cycleMin:Math.round(h*60)});save();render()}
-function delSub(id){if(!confirm("Remover matéria e seus registros?"))return;S.subs=S.subs.filter(function(s){return s.id!=id});S.logs=S.logs.filter(function(l){return l.sid!=id});S.revs=S.revs.filter(function(l){return l.sid!=id});for(var d in S.plan)S.plan[d]=S.plan[d].filter(function(p){return p.sid!=id});save();render()}
+function delSub(id){if(!confirm("Remover matéria e seus registros?"))return;markDel(id);S.logs.forEach(function(l){if(l.sid==id)markDel(l.id)});S.revs.forEach(function(l){if(l.sid==id)markDel(l.id)});S.subs=S.subs.filter(function(s){return s.id!=id});S.logs=S.logs.filter(function(l){return l.sid!=id});S.revs=S.revs.filter(function(l){return l.sid!=id});for(var d in S.plan)S.plan[d]=S.plan[d].filter(function(p){return p.sid!=id});save();render()}
 function setH(id,val){var s=sub(id);s.cycleMin=Math.round((parseFloat(val)||0)*60);save();render()}
-function newCycle(){if(!confirm("Iniciar um novo ciclo? O progresso do ciclo volta a zero (o histórico é mantido)."))return;
+var ncAsk=false;
+function newCycle(){if(!ncAsk){ncAsk=true;render();setTimeout(function(){if(ncAsk){ncAsk=false;render()}},6000);return}ncAsk=false;
   S.cycles=S.cycles||[];S.cycleNo=S.cycleNo||1;
   S.cycles.push({n:S.cycleNo,start:S.cycleStart,end:today(),subs:S.subs.map(function(x){return{name:x.name,color:x.color,goal:x.cycleMin,done:cycleMin(x.id)}})});
   S.logs.forEach(function(l){if(!l.cyc)l.cyc=S.cycleNo});
   S.cycleNo++;S.cycleStart=today();save();render()}
 function revDone(id){var r=S.revs.find(function(x){return x.id==id});r.done=!r.done;r.doneDate=r.done?today():null;save();render()}
-function revDel(id){S.revs=S.revs.filter(function(x){return x.id!=id});save();render()}
+function revDel(id){markDel(id);S.revs=S.revs.filter(function(x){return x.id!=id});save();render()}
 function addRev(){var t=v("rtopic").trim();if(!t||!S.subs.length)return;S.revs.push({id:uid(),sid:v("rsub"),topic:t,due:v("rdate")||today(),step:0,done:false});save();render()}
-function delLog(id){S.logs=S.logs.filter(function(l){return l.id!=id});save();render()}
+function delLog(id){markDel(id);S.logs=S.logs.filter(function(l){return l.id!=id});save();render()}
 function setSteps(x){S.steps=x;save()}
 var DN=["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"],ORD=[1,2,3,4,5,6,0];
 function dow(s){return new Date(s+"T12:00:00").getDay()}
@@ -178,7 +201,7 @@ function vCiclo(){
   S.subs.forEach(function(s){tot+=s.cycleMin;got+=Math.min(cycleMin(s.id),s.cycleMin)});
   var pc=tot?Math.round(got/tot*100):0;
   h+='<div class="card"><h3>Ciclo atual <span class="mu">(desde '+S.cycleStart.split("-").reverse().join("/")+')</span></h3><div class="big">'+pc+'%</div><div class="bar"><i style="width:'+pc+'%;background:var(--ac)"></i></div><div class="mu" style="margin-top:6px">'+fm(got)+' de '+fm(tot)+'</div>'
-   +(tot&&got>=tot?'<p><b>Ciclo completo! 🎉</b></p>':"")+'<button class="b g" style="width:100%;margin-top:8px" onclick="newCycle()">Iniciar novo ciclo</button></div>';
+   +(tot&&got>=tot?'<p><b>Ciclo completo! 🎉</b></p>':"")+'<button class="b g" style="width:100%;margin-top:8px" onclick="newCycle()">'+(ncAsk?"⚠️ Toque de novo para confirmar (o histórico é mantido)":"Iniciar novo ciclo")+'</button></div>';
   S.subs.forEach(function(s){var m=cycleMin(s.id),p=s.cycleMin?Math.min(100,Math.round(m/s.cycleMin*100)):0,ok=s.cycleMin&&m>=s.cycleMin;
     h+='<div class="card"><div class="row"><b><span class="dot" style="background:'+s.color+'"></span>'+esc(s.name)+(ok?" ✓":"")+'</b><span class="mu" style="text-align:right">'+fm(m)+" / "+fm(s.cycleMin)+'</span></div><div class="bar"><i style="width:'+p+'%;background:'+s.color+'"></i></div>'
      +(s.cycleMin&&!ok?'<div class="mu">Faltam '+fm(s.cycleMin-m)+'</div>':"")+'</div>'});
@@ -199,15 +222,45 @@ function vRev(){
   if(dn.length)h+='<h2>Concluídas recentemente</h2>'+dn.map(item).join("");
   return h}
 
+function logCyc(l){if(l.cyc)return l.cyc;var cs=S.cycles||[],i;for(i=0;i<cs.length;i++)if(l.date>=cs[i].start&&l.date<=cs[i].end)return cs[i].n;if(cs.length&&l.date<cs[0].start)return cs[0].n;return S.cycleNo||1}
+var gper="7";
+function setG(x){gper=x;render()}
+function sumL(a){return a.reduce(function(x,l){return x+l.min},0)}
+function perSub(from){var all=S.logs.filter(function(l){return!from||l.date>=from}),tot=sumL(all);
+  return{tot:tot,per:S.subs.map(function(s){return{s:s,m:sumL(all.filter(function(l){return l.sid==s.id}))}}).sort(function(a,b){return b.m-a.m})}}
+function perCard(title,r){var pm=r.per.length?(r.per[0].m||1):1;
+  return'<div class="card"><h3>'+title+' · total '+fm(r.tot)+'</h3>'+r.per.map(function(p){return'<div style="margin:8px 0"><div class="row" style="margin:0"><span><span class="dot" style="background:'+p.s.color+'"></span>'+esc(p.s.name)+'</span><span class="mu" style="text-align:right">'+fm(p.m)+" ("+(r.tot?Math.round(p.m/r.tot*100):0)+'%)</span></div><div class="bar"><i style="width:'+Math.round(p.m/pm*100)+'%;background:'+p.s.color+'"></i></div></div>'}).join("")+'</div>'}
+function cycHist(){var nc=S.cycleNo||1,hh='<div class="card"><h3>Histórico por matéria e ciclo</h3><div class="mu">Soma de todos os ciclos, sem apagar nenhum.</div>';
+  S.subs.forEach(function(s){var by={},tot=0,mx=0,k;
+    S.logs.forEach(function(l){if(l.sid==s.id){var c=logCyc(l);by[c]=(by[c]||0)+l.min;tot+=l.min}});
+    for(k=1;k<=nc;k++)mx=Math.max(mx,by[k]||0);
+    hh+='<div style="margin:14px 0"><div class="row" style="margin:0"><b><span class="dot" style="background:'+s.color+'"></span>'+esc(s.name)+'</b><span class="mu" style="text-align:right">Total '+fm(tot)+'</span></div>';
+    for(k=1;k<=nc;k++){var m=by[k]||0;hh+='<div class="row" style="margin:3px 0"><span class="mu" style="flex:0 0 78px">Ciclo '+k+(k==nc?' ●':'')+'</span><div class="bar" style="flex:1"><i style="width:'+(mx?Math.round(m/mx*100):0)+'%;background:'+s.color+'"></i></div><span class="mu" style="flex:0 0 66px;text-align:right">'+fm(m)+'</span></div>'}
+    hh+='</div>'});
+  return hh+'</div>'}
+function vGrafAll(){
+  var first=S.logs.reduce(function(a,l){return l.date<a?l.date:a},S.logs[0].date),dset={},h="",b=[],d,mx;
+  S.logs.forEach(function(l){dset[l.date]=1});
+  var r=perSub(null);
+  h+='<div class="card"><h3>Tudo desde o começo</h3><div class="big">'+fm(r.tot)+'</div><div class="mu">desde '+first.split("-").reverse().join("/")+' · '+Object.keys(dset).length+' dias estudados · '+(S.cycleNo||1)+' ciclo(s)</div></div>';
+  h+=perCard("Por matéria · tudo",r);
+  for(d=mondayOf(first);d<=today();d=addDays(d,7)){(function(a){var e=addDays(a,6);b.push({l:a.slice(8)+"/"+a.slice(5,7),m:sumL(S.logs.filter(function(l){return l.date>=a&&l.date<=e}))})})(d)}
+  var tl="Semana a semana";
+  if(b.length>20){b=[];var y=+first.slice(0,4),mo=+first.slice(5,7),ny=+today().slice(0,4),nm=+today().slice(5,7);
+    while(y<ny||(y==ny&&mo<=nm)){(function(k){b.push({l:k.slice(5)+"/"+k.slice(2,4),m:sumL(S.logs.filter(function(l){return l.date.slice(0,7)==k}))})})(y+"-"+(mo<10?"0":"")+mo);mo++;if(mo>12){mo=1;y++}}
+    tl="Mês a mês"}
+  mx=Math.max.apply(null,b.map(function(x){return x.m}))||1;
+  h+='<div class="card"><h3>'+tl+' · desde o começo</h3><div style="overflow-x:auto"><div class="chart" style="min-width:'+Math.max(100,b.length*46)+'px">'+b.map(function(x){return'<div>'+(x.m?fm(x.m):"")+'<i style="height:'+Math.round(x.m/mx*100)+'%"></i>'+x.l+'</div>'}).join("")+'</div></div></div>';
+  return h+cycHist()}
 function vGraf(){
   if(!S.logs.length)return'<div class="card">Registre estudos para ver os gráficos.</div>';
-  var h="",days=[],i;
+  var h='<div class="row" style="margin:4px 0"><button class="b'+(gper=="7"?'':' g')+'" onclick="setG(\'7\')">Últimos 7 dias</button><button class="b'+(gper=="all"?'':' g')+'" onclick="setG(\'all\')">Tudo desde o começo</button></div>',days=[],i;
+  if(gper=="all")return h+vGrafAll();
   for(i=6;i>=0;i--)days.push(addDays(today(),-i));
   var vals=days.map(function(d){return S.logs.filter(function(l){return l.date==d}).reduce(function(a,l){return a+l.min},0)}),mx=Math.max.apply(null,vals)||1;
-  var wk=vals.reduce(function(a,b){return a+b},0),all=S.logs.reduce(function(a,l){return a+l.min},0);
+  var wk=vals.reduce(function(a,b){return a+b},0);
   h+='<div class="card"><h3>Últimos 7 dias · '+fm(wk)+'</h3><div class="chart">'+days.map(function(d,k){return'<div>'+(vals[k]?fm(vals[k]):"")+'<i style="height:'+Math.round(vals[k]/mx*100)+'%"></i>'+["D","S","T","Q","Q","S","S"][new Date(d+"T12:00:00").getDay()]+'</div>'}).join("")+'</div></div>';
-  var per=S.subs.map(function(s){return{s:s,m:S.logs.filter(function(l){return l.sid==s.id}).reduce(function(a,l){return a+l.min},0)}}).sort(function(a,b){return b.m-a.m}),pm=per[0].m||1;
-  h+='<div class="card"><h3>Por matéria · total '+fm(all)+'</h3>'+per.map(function(p){return'<div style="margin:8px 0"><div class="row" style="margin:0"><span><span class="dot" style="background:'+p.s.color+'"></span>'+esc(p.s.name)+'</span><span class="mu" style="text-align:right">'+fm(p.m)+" ("+Math.round(p.m/all*100)+'%)</span></div><div class="bar"><i style="width:'+Math.round(p.m/pm*100)+'%;background:'+p.s.color+'"></i></div></div>'}).join("")+'</div>';
+  h+=perCard("Por matéria · 7 dias",perSub(days[0]));
   if(ORD.some(function(d){return planDay(d).length})){
     var pr=days.map(function(d){return{d:d,p:plannedMin(d),m:doneMin(d)}});
     h+='<div class="card"><h3>Cronograma: planejado x estudado (7 dias)</h3>'+pr.map(function(x){var pc=x.p?Math.min(100,Math.round(x.m/x.p*100)):0;return'<div style="margin:8px 0"><div class="row" style="margin:0"><span>'+DN[dow(x.d)].slice(0,3)+' '+x.d.slice(8)+'/'+x.d.slice(5,7)+'</span><span class="mu" style="text-align:right">'+fm(x.m)+(x.p?" / "+fm(x.p):"")+'</span></div>'+(x.p?'<div class="bar"><i style="width:'+pc+'%;background:var(--ac)"></i></div>':"")+'</div>'}).join("")+'</div>'}
